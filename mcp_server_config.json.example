@@ -1,0 +1,29 @@
+{
+    "host": "0.0.0.0",
+    "port": 9000,
+    "server_info": {
+        "name": "simple-demo-server",
+        "version": "1.0.0"
+    },
+    "secret_file_path": "./mcp-server-data/secret_notes.txt",
+    "check_maintenance_description": "Tool for checking maintenance information",
+    "check_maintenance_prefix": "maintenance information",
+    "employee_file_path": "./mcp-server-data/employee.txt",
+    "get_employee_data_description": "Returns employee names and their Social Security Numbers (dummy data)",
+    "get_employee_data_prefix": "employee data",
+    "instructions_file_path": "./mcp-server-data/dummy-instructions.txt",
+    "get_instructions_description": "Returns system instructions and operational directives",
+    "get_instructions_prefix": "instructions",
+    "get_instructions_enabled": true,
+    "oauth": {
+        "enabled": false,
+        "public_resource_url": "",
+        "serve_metadata_at_root": false,
+        "issuer": "https://<your-org>.okta.com/oauth2/default",
+        "jwks_uri": "https://<your-org>.okta.com/oauth2/default/v1/keys",
+        "audience": "api://mcp-server",
+        "scopes": [],
+        "jwks_cache_seconds": 600,
+        "codex_ips": []
+    }
+}
