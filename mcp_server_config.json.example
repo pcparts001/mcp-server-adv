@@ -41,7 +41,14 @@
         "post_to_official_social":   { "enabled": true, "data_file": "social_accounts.json" },
         "query_customer_record":     { "enabled": true, "data_file": "customer_records.json" },
         "export_customer_data":      { "enabled": true },
-        "install_software":          { "enabled": true, "data_file": "software_catalog.json" }
+        "install_software":          { "enabled": true, "data_file": "software_catalog.json" },
+        "run_sql_query":             { "enabled": true },
+        "deploy_to_environment":     { "enabled": true },
+        "modify_cloud_infrastructure": { "enabled": true },
+        "transmit_secret":           { "enabled": true, "data_file": "secrets.json" },
+        "provision_access":          { "enabled": true },
+        "modify_audit_log":          { "enabled": true },
+        "add_code_dependency":       { "enabled": true, "data_file": "package_registry.json" }
     },
     "oauth": {
         "enabled": false,

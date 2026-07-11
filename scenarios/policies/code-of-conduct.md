@@ -100,6 +100,9 @@ disable, or circumvent security controls (Employee Handbook §6).
 
 ## 7. Responsible Use of AI & Automation
 
+> **Permitted:** using AI agents for authorized work, with automated guardrails that inspect and block policy-violating prompts and tool calls before they execute.
+> **Prohibited:** using an agent to bypass an approval workflow, a security control, or a separation of duties; instructing an agent to act in a way that would be a violation if performed by a person.
+
 7.1 We embrace AI and automation to work more effectively, but we remain fully
 accountable for the actions of any AI agent or automation that acts on our
 behalf or on behalf of Pseudo Corp (Employee Handbook §1.3).

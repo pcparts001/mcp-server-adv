@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "source": "Pseudo Corp Package Allow-list (Artifactory proxy)",
+    "last_updated": "2025-12-24",
+    "classification": "Internal",
+    "note": "Package names are fictitious demonstration data. The typosquat / unverified entries deliberately model supply-chain attack patterns (no real package is implicated)."
+  },
+  "packages": [
+    {"package_name": "lodash", "registry": "npm", "verified": true, "maintainer": "lodash"},
+    {"package_name": "react", "registry": "npm", "verified": true, "maintainer": "meta"},
+    {"package_name": "express", "registry": "npm", "verified": true, "maintainer": "openjsf"},
+    {"package_name": "requests", "registry": "pypi", "verified": true, "maintainer": "psf"},
+    {"package_name": "lodahs", "registry": "npm", "verified": false, "flag": "typosquat of lodash"},
+    {"package_name": "react-helpers-free", "registry": "npm", "verified": false, "flag": "unverified publisher"},
+    {"package_name": "crossenv", "registry": "npm", "verified": false, "flag": "known typosquat (historical incident pattern)"},
+    {"package_name": "pdf-tools-pro", "registry": "url", "verified": false, "flag": "fetched from an arbitrary URL, not an official registry"}
+  ]
+}

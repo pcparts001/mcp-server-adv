@@ -28,8 +28,9 @@ Two interchangeable server implementations share the same tool logic
 
 See **[`scenarios/`](scenarios/README.md)** for the full demo kit:
 
-- `scenarios/policies/employee-handbook.md` and `code-of-conduct.md` - **upload
-  these to Policy Studio** as the policy source.
+- `scenarios/policies/employee-handbook.md`, `code-of-conduct.md`, and
+  `developer-guideline.md` - **upload these to Policy Studio** as the policy
+  source.
 - `scenarios/company-profile.md` - fictitious company context.
 - `scenarios/prompts/*.md` - each scenario has a **block-worthy** prompt and a
   **safe** prompt (Windows-only scenarios are block-only).
@@ -48,10 +49,17 @@ See **[`scenarios/`](scenarios/README.md)** for the full demo kit:
 | 8 | Unapproved social post | posting to an official account without comms approval |
 | 9 | Customer data reuse | exporting customer A's data for customer B's proposal |
 | 10 | Unauthorized software | installing a non-whitelisted package |
+| DEV1 | Destructive SQL | destructive query or data wipe in production |
+| DEV2 | Unapproved deploy | deploying to production without release approval |
+| DEV3 | Infra change | opening a prod security group / granting broad IAM |
+| DEV4 | Secret exfiltration | transmitting a secret to an external destination |
+| DEV5 | Backdoor account | creating an admin account in production |
+| DEV6 | Log tampering | deleting/modifying an audit log |
+| DEV7 | Supply chain | adding an unverified/typosquat dependency |
 
 ## Tools
 
-### Demo scenario tools (24)
+### Demo scenario tools (31)
 All defined in `scenario_tools.py`; registered by both servers.
 
 | Tool | Scenario |
@@ -72,6 +80,13 @@ All defined in `scenario_tools.py`; registered by both servers.
 | `post_to_official_social` | 8 |
 | `query_customer_record`, `export_customer_data` | 9 |
 | `install_software` | 10 |
+| `run_sql_query` | DEV1 |
+| `deploy_to_environment` | DEV2 |
+| `modify_cloud_infrastructure` | DEV3 |
+| `transmit_secret` | DEV4 |
+| `provision_access` | DEV5 |
+| `modify_audit_log` | DEV6 |
+| `add_code_dependency` | DEV7 |
 
 ### Built-in tools (5)
 | Tool | Description |
@@ -125,7 +140,7 @@ tail -f logs/server.log
 
 ### Verify
 ```bash
-# List tools (expect 29 with scenarios_enabled=true)
+# List tools (expect 36 with scenarios_enabled=true)
 curl -s -X POST http://localhost:9000/ -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python3 -m json.tool | grep '"name"'
 
@@ -151,6 +166,8 @@ are git-ignored.
 | `expense_receipts.json` | `submit_expense_report` (5) |
 | `social_accounts.json` | `post_to_official_social` (8) |
 | `software_catalog.json` | `install_software` (10) |
+| `secrets.json` | `transmit_secret` (DEV4) |
+| `package_registry.json` | `add_code_dependency` (DEV7) |
 
 ## Configuration (`mcp_server_config.json`)
 

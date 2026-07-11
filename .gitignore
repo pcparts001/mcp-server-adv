@@ -43,6 +43,8 @@ mcp-server-data/*
 !mcp-server-data/expense_receipts.json.example
 !mcp-server-data/social_accounts.json.example
 !mcp-server-data/software_catalog.json.example
+!mcp-server-data/secrets.json.example
+!mcp-server-data/package_registry.json.example
 
 # Logs
 logs/
