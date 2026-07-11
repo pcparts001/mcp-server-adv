@@ -36,6 +36,13 @@ mcp-server-data/*
 !mcp-server-data/secret_notes.txt.example
 !mcp-server-data/employee.txt.example
 !mcp-server-data/dummy-instructions.txt.example
+!mcp-server-data/documents.json.example
+!mcp-server-data/customer_records.json.example
+!mcp-server-data/candidates.json.example
+!mcp-server-data/contracts.json.example
+!mcp-server-data/expense_receipts.json.example
+!mcp-server-data/social_accounts.json.example
+!mcp-server-data/software_catalog.json.example
 
 # Logs
 logs/

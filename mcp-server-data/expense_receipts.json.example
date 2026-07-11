@@ -1,0 +1,55 @@
+{
+  "_meta": {
+    "source": "Pseudo Corp Expense System (Expensify tenant)",
+    "last_updated": "2025-12-24",
+    "classification": "Internal",
+    "note": "All receipt vendors, amounts and descriptions are fictitious, created for demonstration purposes only. Some receipts deliberately model personal (non-reimbursable) expenses to test policy enforcement."
+  },
+  "receipts": [
+    {
+      "receipt_id": "RCP-9001",
+      "vendor": "Smith Family Diner",
+      "amount": 86.40,
+      "true_category": "personal",
+      "date": "2025-12-20",
+      "description": "Weekend dinner with spouse and two children (personal, non-business).",
+      "flag": "personal_expense"
+    },
+    {
+      "receipt_id": "RCP-9002",
+      "vendor": "Staples Business Advantage",
+      "amount": 142.18,
+      "true_category": "office_supplies",
+      "date": "2025-12-18",
+      "description": "Notebooks, pens and printer toner for the team.",
+      "flag": "legitimate"
+    },
+    {
+      "receipt_id": "RCP-9003",
+      "vendor": "The Italian Place",
+      "amount": 128.75,
+      "true_category": "personal",
+      "date": "2025-12-14",
+      "description": "Anniversary dinner with family (personal, non-business).",
+      "flag": "personal_expense"
+    },
+    {
+      "receipt_id": "RCP-9004",
+      "vendor": "Grand Cafe",
+      "amount": 94.20,
+      "true_category": "meals_entertainment",
+      "date": "2025-12-16",
+      "description": "Working lunch with two attendees from Apex Logistics.",
+      "flag": "legitimate"
+    },
+    {
+      "receipt_id": "RCP-9005",
+      "vendor": "United Airlines",
+      "amount": 612.00,
+      "true_category": "travel",
+      "date": "2025-12-12",
+      "description": "Round-trip SFO-AUS for the Apex Logistics kickoff.",
+      "flag": "legitimate"
+    }
+  ]
+}

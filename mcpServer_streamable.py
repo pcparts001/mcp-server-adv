@@ -7,8 +7,12 @@ FastMCP (Streamable HTTP transport) で提供する。Codex CLI (rmcp Streamable
 クライアント) が Cisco AI Defense MCP Gateway 越しに接続することを想定。
 
 【設計】
-- 既存 mcpServer.py は 1 バイトも変更しない。本ファイルは mcpServer.py を
-  インポートせず、必要なロジック(OAuthVerifier / RFC 9728 / ツール類)をコピーして持つ。
+- 本ファイルは mcpServer.py（標準 http.server 版）をインポートしない。
+  2 つのトランスポート実装を相互に結合しないため（OAuthVerifier / RFC 9728 /
+  既存ツール類はコピーして持つ）。
+- 一方で、両サーバーが共有する「シナリオデモ用ツールロジック」は
+  scenario_tools.py（トランスポート非依存・Python 標準 lib のみ）に集約し、
+  両サーバーからインポートして重複を排除している。
 - FastMCP で stateless_http + json_response の Streamable HTTP を提供。
 - 認証は SDK 組込ではなくカスタム ASGI ミドルウェアで既存 OAuthVerifier を統合
   （Cisco Gateway の 4 段フォールバック resource URL 解決を再現するため）。
@@ -21,10 +25,13 @@ FastMCP (Streamable HTTP transport) で提供する。Codex CLI (rmcp Streamable
 """
 
 import contextlib
+import inspect
 import json
 import os
 import sys
 from typing import Any, Dict, Optional
+
+import scenario_tools  # shared demo-scenario tool logic (transport-agnostic)
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
@@ -143,6 +150,9 @@ def ensure_data_files(config: Dict[str, Any]) -> None:
         "dummy-instructions.txt",
         "[System Instructions]\nStatus: No data\n",
     )
+
+    # シナリオデモ用データファイル（scenario_tools.py が .example から生成）
+    scenario_tools.ensure_scenario_data_files(config)
 
 
 # ============================================================
@@ -327,6 +337,53 @@ def read_text_file(file_path: str, prefix: str) -> str:
 
 
 # ============================================================
+# Scenario tool registration（scenario_tools.py の spec を FastMCP に登録）
+# ============================================================
+def _register_scenario_tool(spec: Dict[str, Any], mcp: FastMCP, config: Dict[str, Any]) -> None:
+    """SCENARIO_TOOL_SPECS の1エントリを FastMCP に登録する。
+
+    inputSchema の properties から関数シグネチャを動的に構築し、required /
+    optional を FastMCP が正しく認識できるようにする。enabled=false のツール
+    （scenarios_enabled=false または個別）は登録しない（= tools/list から自動除外）。
+    """
+    name = spec["name"]
+    if not scenario_tools.is_tool_enabled(config, name):
+        return
+    schema = spec["inputSchema"]
+    props = (schema or {}).get("properties", {}) or {}
+    required = set((schema or {}).get("required", []) or [])
+    annotations = scenario_tools.build_annotations(schema)
+
+    def _fn(**kwargs):
+        # FastMCP は optional 引数にデフォルト None を渡すため、None を除外して
+        # handler 側のデフォルト値が効くようにする。
+        clean = {k: v for k, v in (kwargs or {}).items() if v is not None}
+        result = spec["handler"](clean, config)
+        # handler は MCP 形式 {"content":[{"type":"text","text":...}]} を返す。
+        # FastMCP は関数の戻り値をさらに Content にラップするため、内側の text
+        # 文字列を返して FastMCP に TextContent を構築させる（二重ラップ防止）。
+        content = result.get("content") if isinstance(result, dict) else None
+        if isinstance(content, list) and content and content[0].get("type") == "text":
+            return content[0]["text"]
+        return result
+
+    params = []
+    for pname in props.keys():
+        ptype = annotations.get(pname, str)
+        if pname in required:
+            params.append(inspect.Parameter(
+                pname, inspect.Parameter.KEYWORD_ONLY, annotation=ptype))
+        else:
+            params.append(inspect.Parameter(
+                pname, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=ptype))
+    _fn.__signature__ = inspect.Signature(parameters=params)
+    _fn.__name__ = name
+    _fn.__doc__ = spec["description"]  # FastMCP が説明として採用
+    _fn.__annotations__ = annotations
+    mcp.tool()(_fn)
+
+
+# ============================================================
 # FastMCP サーバ構築
 # ============================================================
 def build_mcp_server(config: Dict[str, Any]) -> FastMCP:
@@ -397,6 +454,12 @@ def build_mcp_server(config: Dict[str, Any]) -> FastMCP:
             "get_instructions_prefix",
             "get_instructions_description",
         )
+
+    # シナリオデモ用ツール（scenario_tools.py）を登録。
+    # inputSchema から動的にシグネチャを構築し、required/optional を反映。
+    # enabled=false（scenarios_enabled=false または個別）のツールは登録しない。
+    for spec in scenario_tools.SCENARIO_TOOL_SPECS:
+        _register_scenario_tool(spec, mcp, config)
 
     # --- プロンプト ---
 

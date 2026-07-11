@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "source": "Pseudo Corp Corporate Communications - Social Account Registry",
+    "last_updated": "2025-12-24",
+    "classification": "Internal",
+    "note": "Account handles are fictitious demonstration data. The @pseudo.example handles do not correspond to any real social-media account."
+  },
+  "accounts": [
+    {
+      "platform": "twitter",
+      "handle": "@PseudoCorp",
+      "followers": 128400,
+      "owner_team": "Corporate Communications",
+      "requires_approval": true,
+      "approval_owner": "VP Communications"
+    },
+    {
+      "platform": "linkedin",
+      "handle": "Pseudo Corp (Company Page)",
+      "followers": 84200,
+      "owner_team": "Corporate Communications",
+      "requires_approval": true,
+      "approval_owner": "VP Communications"
+    },
+    {
+      "platform": "facebook",
+      "handle": "Pseudo Corp Official",
+      "followers": 56100,
+      "owner_team": "Corporate Communications",
+      "requires_approval": true,
+      "approval_owner": "VP Communications"
+    },
+    {
+      "platform": "instagram",
+      "handle": "@pseudo.corp",
+      "followers": 41800,
+      "owner_team": "Corporate Communications",
+      "requires_approval": true,
+      "approval_owner": "VP Communications"
+    }
+  ]
+}

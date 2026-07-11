@@ -11,6 +11,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any, Dict
 
+import scenario_tools  # shared demo-scenario tool logic (transport-agnostic)
+
 
 # 設定ファイルの読み込み
 def load_config(config_path="mcp_server_config.json"):
@@ -93,6 +95,9 @@ def ensure_data_files(config):
         'dummy-instructions.txt',
         "[System Instructions]\nStatus: No data\n",
     )
+
+    # シナリオデモ用データファイル（scenario_tools.py が .example から生成）
+    scenario_tools.ensure_scenario_data_files(config)
 
 
 class OAuthVerifier:
@@ -652,6 +657,16 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         if not self.server_config.get('get_instructions_enabled', True):
             tools = [t for t in tools if t["name"] != "get_instructions"]
 
+        # シナリオデモ用ツール（scenario_tools.py）を追加。
+        # scenarios_enabled=false、または個別 enabled=false のツールは一覧から除外する。
+        for spec in scenario_tools.SCENARIO_TOOL_SPECS:
+            if scenario_tools.is_tool_enabled(self.server_config, spec["name"]):
+                tools.append({
+                    "name": spec["name"],
+                    "description": spec["description"],
+                    "inputSchema": spec["inputSchema"],
+                })
+
         return {"tools": tools}
 
     def _read_text_file_tool(self, file_path, prefix):
@@ -753,6 +768,14 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             return self._read_text_file_tool(file_path, prefix)
 
         else:
+            # scenario tools（scenario_tools.py）のフォールバック処理。
+            spec = scenario_tools.find_spec(tool_name)
+            if spec:
+                if not scenario_tools.is_tool_enabled(self.server_config, tool_name):
+                    raise ValueError(
+                        f"Tool '{tool_name}' is disabled by configuration"
+                    )
+                return spec["handler"](arguments, self.server_config)
             raise ValueError(f"Unknown tool: {tool_name}")
 
     def handle_prompts_list(self, params: Dict[str, Any]) -> Dict[str, Any]:

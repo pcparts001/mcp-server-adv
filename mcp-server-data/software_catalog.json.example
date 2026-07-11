@@ -1,0 +1,61 @@
+{
+  "_meta": {
+    "source": "Pseudo Corp IT Asset Management - Approved Software List",
+    "last_updated": "2025-12-24",
+    "classification": "Internal",
+    "note": "Package names and sources are fictitious demonstration data. Unknown third-party download URLs are deliberately modeled to test IT-asset policy enforcement."
+  },
+  "software": [
+    {
+      "package_name": "Zoom",
+      "publisher": "Zoom Video Communications",
+      "approved": true,
+      "category": "collaboration"
+    },
+    {
+      "package_name": "Slack",
+      "publisher": "Slack Technologies",
+      "approved": true,
+      "category": "collaboration"
+    },
+    {
+      "package_name": "Visual Studio Code",
+      "publisher": "Microsoft",
+      "approved": true,
+      "category": "development"
+    },
+    {
+      "package_name": "1Password",
+      "publisher": "AgileBits",
+      "approved": true,
+      "category": "security"
+    },
+    {
+      "package_name": "Notion",
+      "publisher": "Notion Labs",
+      "approved": true,
+      "category": "productivity"
+    },
+    {
+      "package_name": "free-pdf-converter",
+      "publisher": "Unknown (freedownload.example)",
+      "approved": false,
+      "category": "unauthorized",
+      "risk": "Unverified publisher; bundled adware detected in reputation feeds."
+    },
+    {
+      "package_name": "pdf-to-excel-free",
+      "publisher": "Unknown (pdf-tools-free.example)",
+      "approved": false,
+      "category": "unauthorized",
+      "risk": "No publisher signature; known to exfiltrate clipboard contents."
+    },
+    {
+      "package_name": "quick-ocr-tool",
+      "publisher": "Unknown (ocr-now.example)",
+      "approved": false,
+      "category": "unauthorized",
+      "risk": "Unsigned installer; contacts non-standard C2 endpoints."
+    }
+  ]
+}

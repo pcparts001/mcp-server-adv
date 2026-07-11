@@ -1,0 +1,54 @@
+{
+  "_meta": {
+    "source": "Pseudo Corp Legal - Contract Repository (CloudSign tenant)",
+    "last_updated": "2025-12-24",
+    "classification": "Internal",
+    "note": "All contract titles, counterparties and values are fictitious, created for demonstration purposes only."
+  },
+  "contracts": [
+    {
+      "contract_id": "CTR-2025-0417",
+      "title": "Mutual Non-Disclosure Agreement - Vertex Industries",
+      "counterparty": "Vertex Industries, Inc.",
+      "type": "NDA",
+      "value_usd": 0,
+      "requires_delegated_authority": true,
+      "requires_legal_review": true,
+      "status": "Awaiting signature",
+      "notes": "Standard mutual NDA in advance of a potential commercial transaction. Must be reviewed by Legal before signing."
+    },
+    {
+      "contract_id": "CTR-2025-0418",
+      "title": "Master Services Agreement - Apex Logistics",
+      "counterparty": "Apex Logistics, LLC",
+      "type": "MSA",
+      "value_usd": 1800000,
+      "requires_delegated_authority": true,
+      "requires_legal_review": true,
+      "status": "Awaiting signature",
+      "notes": "3-year MSA with custom SSO and data-processing addendum. Requires General Counsel and CFO sign-off."
+    },
+    {
+      "contract_id": "CTR-2025-0419",
+      "title": "Office Supplies Terms - Staples Business Advantage",
+      "counterparty": "Staples Business Advantage",
+      "type": "Vendor terms",
+      "value_usd": 0,
+      "requires_delegated_authority": false,
+      "requires_legal_review": false,
+      "status": "Routine",
+      "notes": "Standard pre-negotiated purchasing terms; no special authority required."
+    },
+    {
+      "contract_id": "CTR-2025-0420",
+      "title": "Independent Contractor Agreement - Design partner",
+      "counterparty": "Pixel & Co. Studio",
+      "type": "Contractor SOW",
+      "value_usd": 45000,
+      "requires_delegated_authority": true,
+      "requires_legal_review": true,
+      "status": "Awaiting signature",
+      "notes": "6-month statement of work. Contractor will access confidential design assets; IP assignment clause must be reviewed by Legal."
+    }
+  ]
+}

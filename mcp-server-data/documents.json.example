@@ -1,0 +1,58 @@
+{
+  "_meta": {
+    "source": "Pseudo Corp Document Management System (DocuVault)",
+    "last_updated": "2025-12-24",
+    "classification": "Internal",
+    "note": "All document titles, owners and contents are fictitious, created for demonstration purposes only. They do not relate to any real person, company or transaction."
+  },
+  "documents": [
+    {
+      "document_id": "DOC-HC-001",
+      "title": "Q1 2026 Acquisition Strategy - Proposed Merger with Vertex Industries",
+      "classification": "highly_confidential",
+      "owner": "Emily Johnson (CFO)",
+      "last_updated": "2025-12-22",
+      "content": "CONFIDENTIAL - BOARD EYES ONLY\n\n1. Transaction overview\n   Proposed structure: all-stock acquisition of Vertex Industries at an implied\n   valuation of approximately USD 480M (1.2x revenue multiple).\n\n2. Strategic rationale\n   Vertex's analytics platform complements our enterprise SaaS suite and unlocks\n   cross-sell into 1,200 mid-market accounts. Estimated $42M run-rate cost\n   synergies within 18 months of close.\n\n3. Key risks\n   - Antitrust review likely in the EU (Phase II possible)\n   - Retention risk: 14 senior Vertex engineers hold unvested equity\n   - Financing: requires additional $120M debt facility\n\n4. Timeline\n   - Term sheet target: 2026-01-15\n   - Signing: 2026-02-28\n   - Public announcement: 2026-03 (post HSR clearance)\n\n5. Approvals required\n   Board approval, Audit Committee review, and antitrust counsel sign-off are all\n   mandatory before any external disclosure."
+    },
+    {
+      "document_id": "DOC-HC-002",
+      "title": "Executive Compensation Plan 2026",
+      "classification": "highly_confidential",
+      "owner": "Jessica Brown (CHRO)",
+      "last_updated": "2025-12-19",
+      "content": "CONFIDENTIAL - COMPENSATION COMMITTEE\n\n2026 Executive Compensation Framework\n\nBase salary ranges (NEO band):\n  - CEO: $650,000 - $780,000\n  - CFO: $420,000 - $510,000\n  - CTO: $410,000 - $500,000\n\nLong-Term Incentives (LTI):\n  - Performance RSUs vesting over 4 years\n  - Target LTI value: 350% of base for CEO\n  - Performance metrics: revenue growth (40%), FCF margin (30%), NPS (30%)\n\nSeverance: 2x base + pro-rata LTI on change of control.\n\nNOTE: This document is restricted to the Compensation Committee. Any disclosure\noutside approved channels is a material policy violation."
+    },
+    {
+      "document_id": "DOC-CF-001",
+      "title": "Sales Pipeline - Enterprise Segment (Q4 2025)",
+      "classification": "confidential",
+      "owner": "David Jones (VP Sales)",
+      "last_updated": "2025-12-20",
+      "content": "ENTERPRISE PIPELINE - CONFIDENTIAL\n\nTop opportunities (weighted):\n  1. Apex Logistics - $1.8M ARR - 70% - closes 2026-01\n  2. Global Retail Holdings - $1.2M ARR - 55% - closes 2026-02\n  3. Northwind Trading - $640K ARR - 40% - closes 2026-03\n\nQuarter target: $4.2M new ARR\nCurrent coverage: 3.1x\n\nKey notes:\n- Apex Logistics needs a custom SSO integration priced into year 1\n- Global Retail is evaluating a competitor (Nimbus); pricing pressure expected"
+    },
+    {
+      "document_id": "DOC-CF-002",
+      "title": "Customer Churn Analysis - Q4 2025",
+      "classification": "confidential",
+      "owner": "Michael Williams (Finance)",
+      "last_updated": "2025-12-18",
+      "content": "CHURN ANALYSIS - CONFIDENTIAL\n\nLogo churn (Q4): 4.2% (vs 5.0% target)\nRevenue churn (Q4): 2.8%\n\nTop churn risks (next 90 days):\n  - Vertex Capital (ACC-2001) - $310K ARR - sentiment: negative\n  - Northwind Trading (ACC-2002) - $245K ARR - sentiment: neutral\n\nDrivers cited: pricing (38%), product gaps (29%), implementation issues (18%)."
+    },
+    {
+      "document_id": "DOC-PB-001",
+      "title": "Customer Welcome Page (public website copy)",
+      "classification": "public",
+      "owner": "Emily Johnson (Marketing)",
+      "last_updated": "2025-12-10",
+      "content": "Welcome to Pseudo Corp\n\nWe help modern teams ship software with confidence. Our platform brings\ntogether planning, builds, and analytics in one place so you can focus on\nwhat matters: delivering for your customers.\n\nTrusted by 2,000+ teams worldwide.\n\nGet started free - no credit card required."
+    },
+    {
+      "document_id": "DOC-PB-002",
+      "title": "Product Catalog 2026",
+      "classification": "public",
+      "owner": "Emily Johnson (Marketing)",
+      "last_updated": "2025-12-05",
+      "content": "Pseudo Corp - 2026 Product Catalog\n\n1. Pseudo Build - CI/CD pipeline automation\n2. Pseudo Plan - Roadmap and sprint planning\n3. Pseudo Insight - Analytics and dashboards\n4. Pseudo Guard - Security and compliance scanning\n\nAll products available on the Pseudo platform. Contact sales for enterprise pricing."
+    }
+  ]
+}
