@@ -32,6 +32,7 @@ import inspect
 import json
 import os
 import sys
+import uuid
 from typing import Any, Dict, Optional
 
 import scenario_tools  # shared demo-scenario tool logic (transport-agnostic)
@@ -616,19 +617,17 @@ class GatewayAcceptHeaderMiddleware(BaseHTTPMiddleware):
 
 
 class GatewaySseKeepAliveMiddleware(BaseHTTPMiddleware):
-    """Cisco GW 対策: GW 経由の GET /mcp を横取りして legacy HTTP+SSE（2024-11-05）互換の
-    維持型 SSE ストリームを返す。
+    """Cisco GW 対策: GW 経由の GET /mcp を横取りし、Mcp-Session-Id を発行して維持型 SSE を返す。
 
-    Cisco AI Defense MCP Gateway は legacy HTTP+SSE（mcp-protocol-version: 2024-11-05）で
-    バックエンドに接続する（実測: GW は GET /mcp を開き event: endpoint を待つ。Cisco mcp-scanner
-    も SSE/Streamable HTTP 両対応を公言）。FastMCP（Streamable HTTP）は GET /mcp の SSE を
-    リクエスト処理の終了で即座に閉じてしまい（"Terminating session: None"）、event: endpoint も
-    送らないため、GW が POST 先を特定できずリトライ→失敗していた。
+    Cisco AI Defense MCP Gateway は Streamable HTTP でバックエンドに接続する（URL に /sse を
+    含まないため。mcp-scanner scanner.py:1456 と同一ロジック）。GW は initialize 前に GET /mcp
+    で probe し、FastMCP（stateless）は SSE を即座に閉じてしまう（"Terminating session: None"）
+    ため GW がリトライ→失敗する（実測: 200 + text/event-stream でも満足せず3回リトライ）。
 
-    これを回避するため、GW 経由（X-Forwarded-For ヘッダあり）の GET /mcp を横取りし、
-    event: endpoint で POST 先（/mcp）を通知した上で ": ping" でストリームを維持する。
-    GW は /mcp に POST し、FastMCP の Streamable HTTP POST エンドポイントが initialize/
-    tools/list 等を処理する（GET の横取りは POST 通信に影響しない）。
+    Streamable HTTP の stateful セッション確立を模倣するため、GW 経由（X-Forwarded-For ヘッダ
+    あり）の GET /mcp を横取りし、Mcp-Session-Id ヘッダを発行した上で ": ping" でストリームを
+    維持する。GW がセッションID を取得して POST /mcp（initialize）に進むことを期待する。
+    FastMCP は stateless のため POST に付いた Mcp-Session-Id は検証せず処理する。
 
     ダイレクト接続（X-Forwarded-For 無し）は現状のまま FastMCP に通し、直接接続の Codex/rmcp
     の動作を壊さない。
@@ -641,9 +640,10 @@ class GatewaySseKeepAliveMiddleware(BaseHTTPMiddleware):
             and (path == "/mcp" or path.endswith("/mcp"))
             and request.headers.get("x-forwarded-for", "")
         ):
+            session_id = uuid.uuid4().hex
             print(
-                "   [GW-via] GET /mcp 横取り: 維持型 SSE キープアライブを返す "
-                "(x-forwarded-for あり = GW 経由)"
+                f"   [GW-via] GET /mcp 横取り: Mcp-Session-Id 発行 + 維持型 SSE "
+                f"(session={session_id}, x-forwarded-for あり = GW 経由)"
             )
             return StreamingResponse(
                 self._sse_keepalive_stream(),
@@ -652,22 +652,15 @@ class GatewaySseKeepAliveMiddleware(BaseHTTPMiddleware):
                     "Cache-Control": "no-cache, no-transform",
                     "Connection": "keep-alive",
                     "x-accel-buffering": "no",
+                    "Mcp-Session-Id": session_id,
                 },
             )
         return await call_next(request)
 
     @staticmethod
     async def _sse_keepalive_stream():
-        """legacy HTTP+SSE（MCP 2024-11-05）向けの維持型 SSE ストリーム。
-
-        Cisco AI Defense GW は legacy HTTP+SSE でバックエンドに接続し、SSE ストリーム上の
-        event: endpoint で POST 先 URL を待つ（実測 + Cisco mcp-scanner が SSE/Streamable 両対応
-        を公言）。先頭で event: endpoint に /mcp を通知し、その後 ": ping" でストリームを維持する。
-        GW は /mcp に POST し、FastMCP の Streamable HTTP POST エンドポイントが処理する。
-        """
+        """維持型 SSE ストリーム。': ping' コメントを定期送信し、クライアント切断まで維持する。"""
         try:
-            # legacy HTTP+SSE: POST 先 URL を通知（Streamable HTTP と同じ /mcp を流用）
-            yield b"event: endpoint\ndata: /mcp\n\n"
             while True:
                 yield b": ping\n\n"
                 await asyncio.sleep(15)
