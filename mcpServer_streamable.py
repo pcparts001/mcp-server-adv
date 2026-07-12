@@ -616,17 +616,19 @@ class GatewayAcceptHeaderMiddleware(BaseHTTPMiddleware):
 
 
 class GatewaySseKeepAliveMiddleware(BaseHTTPMiddleware):
-    """Cisco GW 対策: GW 経由の GET /mcp を横取りして維持される無限 SSE ストリームを返す。
+    """Cisco GW 対策: GW 経由の GET /mcp を横取りして legacy HTTP+SSE（2024-11-05）互換の
+    維持型 SSE ストリームを返す。
 
-    Cisco AI Defense MCP Gateway は GET /mcp で SSE ストリームを開き、ストリームが維持される
-    ことを期待する（Streamable HTTP の正規挙動: サーバー通知の待ち受け）。一方で stateless な
-    FastMCP は GET /mcp の SSE をリクエスト処理の終了で即座に閉じてしまう（"Terminating session:
-    None"、streamable_http.py:710-736）。GW はこれを「通知ストリームの異常終了」と判定してリトライ
-    → 失敗する（実測: GET /mcp が 3 回繰り返され POST に進まない）。
+    Cisco AI Defense MCP Gateway は legacy HTTP+SSE（mcp-protocol-version: 2024-11-05）で
+    バックエンドに接続する（実測: GW は GET /mcp を開き event: endpoint を待つ。Cisco mcp-scanner
+    も SSE/Streamable HTTP 両対応を公言）。FastMCP（Streamable HTTP）は GET /mcp の SSE を
+    リクエスト処理の終了で即座に閉じてしまい（"Terminating session: None"）、event: endpoint も
+    送らないため、GW が POST 先を特定できずリトライ→失敗していた。
 
-    これを回避するため、GW 経由（X-Forwarded-For ヘッダあり）の GET /mcp を横取りし、": ping"
-    コメントを定期送信する維持型 SSE ストリームを返す。POST /mcp は FastMCP に通す
-    （initialize/tools/list 等は POST で完結するため、GET の横取りは MCP 通信に影響しない）。
+    これを回避するため、GW 経由（X-Forwarded-For ヘッダあり）の GET /mcp を横取りし、
+    event: endpoint で POST 先（/mcp）を通知した上で ": ping" でストリームを維持する。
+    GW は /mcp に POST し、FastMCP の Streamable HTTP POST エンドポイントが initialize/
+    tools/list 等を処理する（GET の横取りは POST 通信に影響しない）。
 
     ダイレクト接続（X-Forwarded-For 無し）は現状のまま FastMCP に通し、直接接続の Codex/rmcp
     の動作を壊さない。
@@ -656,8 +658,16 @@ class GatewaySseKeepAliveMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     async def _sse_keepalive_stream():
-        """維持型 SSE ストリーム。': ping' コメントを定期送信し、クライアント切断まで維持する。"""
+        """legacy HTTP+SSE（MCP 2024-11-05）向けの維持型 SSE ストリーム。
+
+        Cisco AI Defense GW は legacy HTTP+SSE でバックエンドに接続し、SSE ストリーム上の
+        event: endpoint で POST 先 URL を待つ（実測 + Cisco mcp-scanner が SSE/Streamable 両対応
+        を公言）。先頭で event: endpoint に /mcp を通知し、その後 ": ping" でストリームを維持する。
+        GW は /mcp に POST し、FastMCP の Streamable HTTP POST エンドポイントが処理する。
+        """
         try:
+            # legacy HTTP+SSE: POST 先 URL を通知（Streamable HTTP と同じ /mcp を流用）
+            yield b"event: endpoint\ndata: /mcp\n\n"
             while True:
                 yield b": ping\n\n"
                 await asyncio.sleep(15)
