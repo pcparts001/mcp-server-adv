@@ -13,9 +13,9 @@ FastMCP (Streamable HTTP transport) で提供する。Codex CLI (rmcp Streamable
 - 一方で、両サーバーが共有する「シナリオデモ用ツールロジック」は
   scenario_tools.py（トランスポート非依存・Python 標準 lib のみ）に集約し、
   両サーバーからインポートして重複を排除している。
-- FastMCP で stateful_http + SSE レスポンスの Streamable HTTP を提供
-  （Cisco AI Defense Gateway は GET /mcp で SSE プローブするため。stateless + json_response
-   だと GET /mcp が 406 になり GW が initialize POST に進まない）。
+- FastMCP で stateless_http + SSE レスポンス（json_response=False）の Streamable HTTP を提供。
+  Cisco AI Defense Gateway は GET /mcp で SSE プローブするが Accept: text/event-stream を送らない
+  ため、GatewayAcceptHeaderMiddleware で Accept を補完する（無いと FastMCP が 406 を返す）。
 - 認証は SDK 組込ではなくカスタム ASGI ミドルウェアで既存 OAuthVerifier を統合
   （Cisco Gateway の 4 段フォールバック resource URL 解決を再現するため）。
 - RFC 9728 Protected Resource Metadata は /.well-known/oauth-protected-resource
@@ -394,12 +394,13 @@ def build_mcp_server(config: Dict[str, Any]) -> FastMCP:
     # NOTE: FastMCP 1.28 は version 引数を持たない。serverInfo.version は SDK 既定値になる。
     mcp = FastMCP(
         server_info.get("name", "simple-demo-server"),
-        # Cisco AI Defense MCP Gateway は GET /mcp で SSE ストリームの確立を試みる（Streamable HTTP
-        # プローブ）。stateless_http=True + json_response=True（POST 専用 JSON over HTTP）だと
-        # GET /mcp が 406 Not Acceptable になり、GW が initialize POST に進まない（実測）。
-        # そのためステートフル + SSE レスポンスで運用する。GW→単一バックエンド構成なので
-        # セッション親和性は問題なく、ダイレクト接続（Codex/rmcp）も stateful に対応するため両立する。
-        stateless_http=False,
+        # Cisco AI Defense MCP Gateway は GET /mcp で SSE ストリームの確立を試みるが、Accept:
+        # text/event-stream を送らない（実測）。FastMCP は Accept に text/event-stream を要求し
+        # （streamable_http.py:672-681）、無いと 406 を返すため GatewayAcceptHeaderMiddleware で補完する。
+        # stateless_http=True の理由: GW は initialize せずに GET するため、stateful だとセッションID 無し
+        # で 400 になる（streamable_http.py:835-851）。stateless ならセッションID 検証をスキップし、
+        # Accept 補完だけで GET /mcp が 200/SSE になる。json_response=False は SSE レスポンスに必須。
+        stateless_http=True,
         json_response=False,
         streamable_http_path="/mcp",
         # 外部公開（直接接続 / Cisco Gateway 背後）を想定。
@@ -575,6 +576,44 @@ class GatewayPathRewriteMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class GatewayAcceptHeaderMiddleware(BaseHTTPMiddleware):
+    """Cisco Gateway 対策: GET /mcp の Accept ヘッダーに text/event-stream を補完する。
+
+    Cisco AI Defense MCP Gateway は GET /mcp（SSE ストリーム確立）を投げるが Accept:
+    text/event-stream を送らない。FastMCP は Accept に text/event-stream を要求し
+    （streamable_http.py:672-681）、無いと 406 Not Acceptable を返す（実測）。これを回避するため、
+    GW からの GET /mcp の Accept を補完する。POST は補完しない（初期化失敗時の切り分けを明確にするため）。
+
+    併せて /mcp の全リクエストヘッダーをデバッグ出力し、GW が実際に送るヘッダーを観察できるように
+    する（Accept 以外の不足ヘッダー特定用・一時的）。
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path == "/mcp" or path.endswith("/mcp"):
+            # [DEBUG] /mcp への全リクエストヘッダーを出力（GW 調査用）
+            print(f"   [DEBUG] {request.method} {path} request headers:")
+            for k, v in request.headers.items():
+                print(f"      {k}: {v}")
+
+            # GET /mcp の Accept に text/event-stream が無ければ補完（GW が送らないため）
+            if request.method == "GET":
+                accept = request.headers.get("accept", "")
+                if "text/event-stream" not in accept:
+                    new_accept = (accept + ", text/event-stream").lstrip(", ").strip()
+                    print(
+                        f"   [GW-via] GET /mcp Accept 補完: "
+                        f"'{accept or '(empty)'}' -> '{new_accept}'"
+                    )
+                    new_headers = [
+                        (k, v) for (k, v) in request.scope["headers"]
+                        if k.lower() != b"accept"
+                    ]
+                    new_headers.append((b"accept", new_accept.encode("latin-1")))
+                    request.scope["headers"] = new_headers
+        return await call_next(request)
+
+
 # ============================================================
 # Starlette アプリ組み立て
 # ============================================================
@@ -641,8 +680,9 @@ def build_app(config: Dict[str, Any]):
 
     # ミドルウェアは追加順と逆順で実行される点に注意。
     # リクエスト通過順: CORS（外）→ GatewayPathRewrite（/ を /mcp にリライト）
-    #                  → BearerAuth（/mcp を認証）→ アプリ
+    #                  → GatewayAcceptHeader（GET /mcp の Accept 補完）→ BearerAuth（/mcp を認証）→ アプリ
     app.add_middleware(BearerAuthMiddleware)
+    app.add_middleware(GatewayAcceptHeaderMiddleware)
     app.add_middleware(GatewayPathRewriteMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -685,7 +725,7 @@ def main() -> None:
     print(f"   Metadata:  http://{host}:{port}/.well-known/oauth-protected-resource"
           + ("  (also at / )" if oauth_cfg.get("serve_metadata_at_root") else ""))
     print("   Protocol:  2025-06-18 (negotiated by SDK)")
-    print("   Transport: Streamable HTTP (stateful, SSE response)")
+    print("   Transport: Streamable HTTP (stateless, SSE response)")
 
     uvicorn.run(app, host=host, port=port)
 
