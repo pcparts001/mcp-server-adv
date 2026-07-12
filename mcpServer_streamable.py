@@ -13,7 +13,9 @@ FastMCP (Streamable HTTP transport) で提供する。Codex CLI (rmcp Streamable
 - 一方で、両サーバーが共有する「シナリオデモ用ツールロジック」は
   scenario_tools.py（トランスポート非依存・Python 標準 lib のみ）に集約し、
   両サーバーからインポートして重複を排除している。
-- FastMCP で stateless_http + json_response の Streamable HTTP を提供。
+- FastMCP で stateful_http + SSE レスポンスの Streamable HTTP を提供
+  （Cisco AI Defense Gateway は GET /mcp で SSE プローブするため。stateless + json_response
+   だと GET /mcp が 406 になり GW が initialize POST に進まない）。
 - 認証は SDK 組込ではなくカスタム ASGI ミドルウェアで既存 OAuthVerifier を統合
   （Cisco Gateway の 4 段フォールバック resource URL 解決を再現するため）。
 - RFC 9728 Protected Resource Metadata は /.well-known/oauth-protected-resource
@@ -392,8 +394,13 @@ def build_mcp_server(config: Dict[str, Any]) -> FastMCP:
     # NOTE: FastMCP 1.28 は version 引数を持たない。serverInfo.version は SDK 既定値になる。
     mcp = FastMCP(
         server_info.get("name", "simple-demo-server"),
-        stateless_http=True,  # Gateway 越しのスケーラビリティ。セッションID を発行しない
-        json_response=True,   # SSE ではなく JSON レスポンス（ログ爆発抑制・Gateway 友好）
+        # Cisco AI Defense MCP Gateway は GET /mcp で SSE ストリームの確立を試みる（Streamable HTTP
+        # プローブ）。stateless_http=True + json_response=True（POST 専用 JSON over HTTP）だと
+        # GET /mcp が 406 Not Acceptable になり、GW が initialize POST に進まない（実測）。
+        # そのためステートフル + SSE レスポンスで運用する。GW→単一バックエンド構成なので
+        # セッション親和性は問題なく、ダイレクト接続（Codex/rmcp）も stateful に対応するため両立する。
+        stateless_http=False,
+        json_response=False,
         streamable_http_path="/mcp",
         # 外部公開（直接接続 / Cisco Gateway 背後）を想定。
         # host="0.0.0.0" を明示しないと FastMCP 既定の 127.0.0.1 扱いとなり、DNS リバインディング保護が
@@ -641,7 +648,7 @@ def build_app(config: Dict[str, Any]):
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "Mcp-Protocol-Version"],
+        allow_headers=["Content-Type", "Authorization", "Mcp-Protocol-Version", "Mcp-Session-Id"],
         expose_headers=["Mcp-Session-Id"],
     )
 
@@ -678,7 +685,7 @@ def main() -> None:
     print(f"   Metadata:  http://{host}:{port}/.well-known/oauth-protected-resource"
           + ("  (also at / )" if oauth_cfg.get("serve_metadata_at_root") else ""))
     print("   Protocol:  2025-06-18 (negotiated by SDK)")
-    print("   Transport: Streamable HTTP (stateless, json_response)")
+    print("   Transport: Streamable HTTP (stateful, SSE response)")
 
     uvicorn.run(app, host=host, port=port)
 
