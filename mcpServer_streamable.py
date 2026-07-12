@@ -26,6 +26,7 @@ FastMCP (Streamable HTTP transport) で提供する。Codex CLI (rmcp Streamable
 - 同じポート（設定の port、既定 9000）で動き、start.sh で既存サーバと切り替え運用する。
 """
 
+import asyncio
 import contextlib
 import inspect
 import json
@@ -42,7 +43,7 @@ from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route
 
 
@@ -614,6 +615,56 @@ class GatewayAcceptHeaderMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class GatewaySseKeepAliveMiddleware(BaseHTTPMiddleware):
+    """Cisco GW 対策: GW 経由の GET /mcp を横取りして維持される無限 SSE ストリームを返す。
+
+    Cisco AI Defense MCP Gateway は GET /mcp で SSE ストリームを開き、ストリームが維持される
+    ことを期待する（Streamable HTTP の正規挙動: サーバー通知の待ち受け）。一方で stateless な
+    FastMCP は GET /mcp の SSE をリクエスト処理の終了で即座に閉じてしまう（"Terminating session:
+    None"、streamable_http.py:710-736）。GW はこれを「通知ストリームの異常終了」と判定してリトライ
+    → 失敗する（実測: GET /mcp が 3 回繰り返され POST に進まない）。
+
+    これを回避するため、GW 経由（X-Forwarded-For ヘッダあり）の GET /mcp を横取りし、": ping"
+    コメントを定期送信する維持型 SSE ストリームを返す。POST /mcp は FastMCP に通す
+    （initialize/tools/list 等は POST で完結するため、GET の横取りは MCP 通信に影響しない）。
+
+    ダイレクト接続（X-Forwarded-For 無し）は現状のまま FastMCP に通し、直接接続の Codex/rmcp
+    の動作を壊さない。
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if (
+            request.method == "GET"
+            and (path == "/mcp" or path.endswith("/mcp"))
+            and request.headers.get("x-forwarded-for", "")
+        ):
+            print(
+                "   [GW-via] GET /mcp 横取り: 維持型 SSE キープアライブを返す "
+                "(x-forwarded-for あり = GW 経由)"
+            )
+            return StreamingResponse(
+                self._sse_keepalive_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "x-accel-buffering": "no",
+                },
+            )
+        return await call_next(request)
+
+    @staticmethod
+    async def _sse_keepalive_stream():
+        """維持型 SSE ストリーム。': ping' コメントを定期送信し、クライアント切断まで維持する。"""
+        try:
+            while True:
+                yield b": ping\n\n"
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            return
+
+
 # ============================================================
 # Starlette アプリ組み立て
 # ============================================================
@@ -680,8 +731,11 @@ def build_app(config: Dict[str, Any]):
 
     # ミドルウェアは追加順と逆順で実行される点に注意。
     # リクエスト通過順: CORS（外）→ GatewayPathRewrite（/ を /mcp にリライト）
-    #                  → GatewayAcceptHeader（GET /mcp の Accept 補完）→ BearerAuth（/mcp を認証）→ アプリ
+    #                  → GatewayAcceptHeader（GET /mcp の Accept 補完 + ヘッダー DEBUG）
+    #                  → GatewaySseKeepAlive（GW 経由の GET /mcp を無限 SSE に横取り）
+    #                  → BearerAuth（/mcp を認証）→ アプリ
     app.add_middleware(BearerAuthMiddleware)
+    app.add_middleware(GatewaySseKeepAliveMiddleware)
     app.add_middleware(GatewayAcceptHeaderMiddleware)
     app.add_middleware(GatewayPathRewriteMiddleware)
     app.add_middleware(
