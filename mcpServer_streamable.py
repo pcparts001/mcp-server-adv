@@ -3,8 +3,8 @@
 Simple MCP Server (Streamable HTTP 版)
 
 mcpServer.py（標準 http.server 版）と同じ機能を、公式 MCP Python SDK の
-FastMCP (Streamable HTTP transport) で提供する。Codex CLI (rmcp Streamable HTTP
-クライアント) が Cisco AI Defense MCP Gateway 越しに接続することを想定。
+FastMCP (Streamable HTTP transport) で提供する。RFC 9728 / OAuth 2.1 準拠の
+MCP Gateway 越し、またはダイレクト接続での利用を想定。
 
 【設計】
 - 本ファイルは mcpServer.py（標準 http.server 版）をインポートしない。
@@ -14,25 +14,21 @@ FastMCP (Streamable HTTP transport) で提供する。Codex CLI (rmcp Streamable
   scenario_tools.py（トランスポート非依存・Python 標準 lib のみ）に集約し、
   両サーバーからインポートして重複を排除している。
 - FastMCP で stateless_http + SSE レスポンス（json_response=False）の Streamable HTTP を提供。
-  Cisco AI Defense Gateway は GET /mcp で SSE プローブするが Accept: text/event-stream を送らない
-  ため、GatewayAcceptHeaderMiddleware で Accept を補完する（無いと FastMCP が 406 を返す）。
 - 認証は SDK 組込ではなくカスタム ASGI ミドルウェアで既存 OAuthVerifier を統合
-  （Cisco Gateway の 4 段フォールバック resource URL 解決を再現するため）。
-- RFC 9728 Protected Resource Metadata は /.well-known/oauth-protected-resource
-  と (serve_metadata_at_root=true 時は) ルート "/" で配信（Cisco Gateway 対策）。
+  （resource URL 解決は X-Forwarded-Host/Proto を含むフォールバック付き・リバースプロキシ背後対応）。
+- RFC 9728 Protected Resource Metadata は oauth.enabled 時のみ /.well-known/oauth-protected-resource
+  で配信。oauth.enabled=false なら配信せず（404）、OAuth を Gateway 側で引き受ける構成で使う。
 
 【既存との互換性】
 - 同じ mcp_server_config.json を読専で読む（深いマージ版に改善）。
 - 同じポート（設定の port、既定 9000）で動き、start.sh で既存サーバと切り替え運用する。
 """
 
-import asyncio
 import contextlib
 import inspect
 import json
 import os
 import sys
-import uuid
 from typing import Any, Dict, Optional
 
 import scenario_tools  # shared demo-scenario tool logic (transport-agnostic)
@@ -44,7 +40,7 @@ from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 
@@ -91,11 +87,6 @@ def load_config(config_path: str = "mcp_server_config.json") -> Dict[str, Any]:
             "audience": "",
             "scopes": [],
             "jwks_cache_seconds": 600,
-            # GET / を /mcp にリライトするクライアントIP（X-Forwarded-For）のホワイトリスト。
-            # Codex の probing（406 を期待）が GW 経由で GET / → root_endpoint(200) になり失敗する
-            # 問題の回避。指定した IP からの GET / のみ /mcp にリライトし、health check 等は
-            # root_endpoint のまま（IP ベースなので health check への影響を排除できる）。
-            "codex_ips": [],
         },
     }
 
@@ -396,16 +387,13 @@ def build_mcp_server(config: Dict[str, Any]) -> FastMCP:
     # NOTE: FastMCP 1.28 は version 引数を持たない。serverInfo.version は SDK 既定値になる。
     mcp = FastMCP(
         server_info.get("name", "simple-demo-server"),
-        # Cisco AI Defense MCP Gateway は GET /mcp で SSE ストリームの確立を試みるが、Accept:
-        # text/event-stream を送らない（実測）。FastMCP は Accept に text/event-stream を要求し
-        # （streamable_http.py:672-681）、無いと 406 を返すため GatewayAcceptHeaderMiddleware で補完する。
-        # stateless_http=True の理由: GW は initialize せずに GET するため、stateful だとセッションID 無し
-        # で 400 になる（streamable_http.py:835-851）。stateless ならセッションID 検証をスキップし、
-        # Accept 補完だけで GET /mcp が 200/SSE になる。json_response=False は SSE レスポンスに必須。
+        # Streamable HTTP を stateless + SSE レスポンスで提供。
+        # stateless_http=True: セッションID 検証をスキップし、initialize 前の GET /mcp プローブ等も
+        # 柔軟に受け付ける（stateful だとセッションID 無しで 400 になる）。json_response=False は SSE 必須。
         stateless_http=True,
         json_response=False,
         streamable_http_path="/mcp",
-        # 外部公開（直接接続 / Cisco Gateway 背後）を想定。
+        # 外部公開（直接接続 / リバースプロキシ・Gateway 背後）を想定。
         # host="0.0.0.0" を明示しないと FastMCP 既定の 127.0.0.1 扱いとなり、DNS リバインディング保護が
         # localhost 限定で自動有効化されて、外部 IP や Gateway の Host ヘッダを 421 Misdirected Request で弾く。
         host="0.0.0.0",
@@ -544,130 +532,6 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-class GatewayPathRewriteMiddleware(BaseHTTPMiddleware):
-    """Cisco Gateway 対策: バックエンドの / に転送された MCP リクエストを /mcp にリライト。
-
-    Cisco AI Defense MCP Gateway はクライアントの POST をバックエンドのルート(/) に転送
-    する（パスリライト）。FastMCP の Streamable HTTP エンドポイントは /mcp のため、
-    そのままでは POST / が 404 になる（Claude Code が Gateway 経由でこの問題に遭遇）。
-    これを回避するため、/ の MCP リクエスト(POST/DELETE) を /mcp にリライトして FastMCP
-    に渡す。GET / は root_endpoint（ヘルス/RFC 9728 discovery）で処理するためリライトしない。
-    これにより Codex（直接 /mcp）と Claude Code（Gateway 経由 /）の両方で動く。
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if path == "/" and request.method in ("POST", "DELETE"):
-            request.scope["path"] = "/mcp"
-            request.scope["raw_path"] = b"/mcp"
-        elif path == "/" and request.method == "GET":
-            # oauth.codex_ips に指定したクライアントIP（X-Forwarded-For）からの GET / のみ
-            # /mcp にリライト（Codex の probing は 406 を期待）。それ以外（GW health check 等）は
-            # root_endpoint のまま。IP ホワイトリスト方式で health check への影響を排除。
-            codex_ips = request.app.state.config.get("oauth", {}).get("codex_ips", []) or []
-            if codex_ips:
-                xff = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-                if xff and xff in codex_ips:
-                    print(
-                        f"   [Codex GW-via compatibility] GET / rewritten to /mcp "
-                        f"(x-forwarded-for={xff} matches oauth.codex_ips). "
-                        f"Codex probing expects 406; applying non-default behavior."
-                    )
-                    request.scope["path"] = "/mcp"
-                    request.scope["raw_path"] = b"/mcp"
-        return await call_next(request)
-
-
-class GatewayAcceptHeaderMiddleware(BaseHTTPMiddleware):
-    """Cisco Gateway 対策: GET /mcp の Accept ヘッダーに text/event-stream を補完する。
-
-    Cisco AI Defense MCP Gateway は GET /mcp（SSE ストリーム確立）を投げるが Accept:
-    text/event-stream を送らない。FastMCP は Accept に text/event-stream を要求し
-    （streamable_http.py:672-681）、無いと 406 Not Acceptable を返す（実測）。これを回避するため、
-    GW からの GET /mcp の Accept を補完する。POST は補完しない（初期化失敗時の切り分けを明確にするため）。
-
-    併せて /mcp の全リクエストヘッダーをデバッグ出力し、GW が実際に送るヘッダーを観察できるように
-    する（Accept 以外の不足ヘッダー特定用・一時的）。
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if path == "/mcp" or path.endswith("/mcp"):
-            # [DEBUG] /mcp への全リクエストヘッダーを出力（GW 調査用）
-            print(f"   [DEBUG] {request.method} {path} request headers:")
-            for k, v in request.headers.items():
-                print(f"      {k}: {v}")
-
-            # GET /mcp の Accept に text/event-stream が無ければ補完（GW が送らないため）
-            if request.method == "GET":
-                accept = request.headers.get("accept", "")
-                if "text/event-stream" not in accept:
-                    new_accept = (accept + ", text/event-stream").lstrip(", ").strip()
-                    print(
-                        f"   [GW-via] GET /mcp Accept 補完: "
-                        f"'{accept or '(empty)'}' -> '{new_accept}'"
-                    )
-                    new_headers = [
-                        (k, v) for (k, v) in request.scope["headers"]
-                        if k.lower() != b"accept"
-                    ]
-                    new_headers.append((b"accept", new_accept.encode("latin-1")))
-                    request.scope["headers"] = new_headers
-        return await call_next(request)
-
-
-class GatewaySseKeepAliveMiddleware(BaseHTTPMiddleware):
-    """Cisco GW 対策: GW 経由の GET /mcp を横取りし、Mcp-Session-Id を発行して維持型 SSE を返す。
-
-    Cisco AI Defense MCP Gateway は Streamable HTTP でバックエンドに接続する（URL に /sse を
-    含まないため。mcp-scanner scanner.py:1456 と同一ロジック）。GW は initialize 前に GET /mcp
-    で probe し、FastMCP（stateless）は SSE を即座に閉じてしまう（"Terminating session: None"）
-    ため GW がリトライ→失敗する（実測: 200 + text/event-stream でも満足せず3回リトライ）。
-
-    Streamable HTTP の stateful セッション確立を模倣するため、GW 経由（X-Forwarded-For ヘッダ
-    あり）の GET /mcp を横取りし、Mcp-Session-Id ヘッダを発行した上で ": ping" でストリームを
-    維持する。GW がセッションID を取得して POST /mcp（initialize）に進むことを期待する。
-    FastMCP は stateless のため POST に付いた Mcp-Session-Id は検証せず処理する。
-
-    ダイレクト接続（X-Forwarded-For 無し）は現状のまま FastMCP に通し、直接接続の Codex/rmcp
-    の動作を壊さない。
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if (
-            request.method == "GET"
-            and (path == "/mcp" or path.endswith("/mcp"))
-            and request.headers.get("x-forwarded-for", "")
-        ):
-            session_id = uuid.uuid4().hex
-            print(
-                f"   [GW-via] GET /mcp 横取り: Mcp-Session-Id 発行 + 維持型 SSE "
-                f"(session={session_id}, x-forwarded-for あり = GW 経由)"
-            )
-            return StreamingResponse(
-                self._sse_keepalive_stream(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache, no-transform",
-                    "Connection": "keep-alive",
-                    "x-accel-buffering": "no",
-                    "Mcp-Session-Id": session_id,
-                },
-            )
-        return await call_next(request)
-
-    @staticmethod
-    async def _sse_keepalive_stream():
-        """維持型 SSE ストリーム。': ping' コメントを定期送信し、クライアント切断まで維持する。"""
-        try:
-            while True:
-                yield b": ping\n\n"
-                await asyncio.sleep(15)
-        except asyncio.CancelledError:
-            return
-
-
 # ============================================================
 # Starlette アプリ組み立て
 # ============================================================
@@ -676,8 +540,10 @@ def build_app(config: Dict[str, Any]):
     mcp = build_mcp_server(config)
 
     oauth_cfg = config.get("oauth", {}) or {}
-    oauth_verifier: Optional[OAuthVerifier] = OAuthVerifier(oauth_cfg) if oauth_cfg.get("enabled") else None
-    serve_metadata_at_root = bool(oauth_cfg.get("serve_metadata_at_root", False))
+    oauth_enabled = bool(oauth_cfg.get("enabled", False))
+    oauth_verifier: Optional[OAuthVerifier] = OAuthVerifier(oauth_cfg) if oauth_enabled else None
+    # oauth.enabled=false なら discovery メタデータは一切 advertise しない（OAuth で保護されていない）
+    serve_metadata_at_root = oauth_enabled and bool(oauth_cfg.get("serve_metadata_at_root", False))
 
     async def metadata_endpoint(request: Request) -> JSONResponse:
         """RFC 9728 Protected Resource Metadata（認証不要）"""
@@ -714,33 +580,32 @@ def build_app(config: Dict[str, Any]):
         async with mcp.session_manager.run():
             yield
 
-    app = Starlette(
-        routes=[
-            # メタデータ/ルートは Mount より前に（Starlette は最初にマッチしたルートが勝つ）
+    # routes 構築: OAuth 有効時のみ RFC 9728 discovery を公開。
+    # oauth.enabled=false なら discovery は存在せず（Mount のフォールスルーで 404）、
+    # バックエンドが OAuth で保護されていないことをクライアント/GW に示す
+    # （OAuth を Gateway 側で引き受ける構成では oauth.enabled=false にする）。
+    routes = []
+    if oauth_enabled:
+        # メタデータは Mount より前に（Starlette は最初にマッチしたルートが勝つ）
+        routes.append(
             Route(
                 "/.well-known/oauth-protected-resource",
                 metadata_endpoint,
                 methods=["GET"],
-            ),
-            Route("/", root_endpoint, methods=["GET"]),
-            # /mcp を含む全 POST は FastMCP の Streamable HTTP アプリへ
-            Mount("/", app=mcp.streamable_http_app()),
-        ],
-        lifespan=lifespan,
-    )
+            )
+        )
+    routes.append(Route("/", root_endpoint, methods=["GET"]))
+    # /mcp を含む全 POST は FastMCP の Streamable HTTP アプリへ
+    routes.append(Mount("/", app=mcp.streamable_http_app()))
+
+    app = Starlette(routes=routes, lifespan=lifespan)
     app.state.config = config
     app.state.oauth_verifier = oauth_verifier
     app.state.serve_metadata_at_root = serve_metadata_at_root
 
-    # ミドルウェアは追加順と逆順で実行される点に注意。
-    # リクエスト通過順: CORS（外）→ GatewayPathRewrite（/ を /mcp にリライト）
-    #                  → GatewayAcceptHeader（GET /mcp の Accept 補完 + ヘッダー DEBUG）
-    #                  → GatewaySseKeepAlive（GW 経由の GET /mcp を無限 SSE に横取り）
-    #                  → BearerAuth（/mcp を認証）→ アプリ
+    # ミドルウェア: CORS（外）→ BearerAuth（oauth.enabled 時に /mcp を認証）→ アプリ
+    # （Cisco GW 互換ハック3種は RFC 9728 / OAuth 2.1 準拠 GW では不要・有害なため削除済）
     app.add_middleware(BearerAuthMiddleware)
-    app.add_middleware(GatewaySseKeepAliveMiddleware)
-    app.add_middleware(GatewayAcceptHeaderMiddleware)
-    app.add_middleware(GatewayPathRewriteMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

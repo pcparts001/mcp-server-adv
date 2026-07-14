@@ -343,8 +343,20 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         # さらに oauth.serve_metadata_at_root=true の場合はルート("/") でもメタデータを返す
         # (MCP Gateway がバックエンドに well-known パスではなく "/" で転送してくる環境向け)。
         oauth_cfg = self.server_config.get("oauth", {}) or {}
-        serve_at_root = oauth_cfg.get("serve_metadata_at_root", False)
-        if path.endswith("/.well-known/oauth-protected-resource") or (serve_at_root and path == ""):
+        oauth_enabled = bool(oauth_cfg.get("enabled", False))
+        serve_at_root = oauth_enabled and bool(oauth_cfg.get("serve_metadata_at_root", False))
+        is_discovery = path.endswith("/.well-known/oauth-protected-resource") or (serve_at_root and path == "")
+        if is_discovery and not oauth_enabled:
+            # OAuth 無効時は discovery メタデータを advertise しない（OAuth で保護されていない）。
+            # OAuth を Gateway 側で引き受ける構成では oauth.enabled=false にする。
+            print(f"   🚫 {path} → 404 (oauth.enabled=false: discovery を配信しない)")
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "not_found"}).encode("utf-8"))
+            return
+        if is_discovery:
             print(f"\n{'='*60}")
             print(f"📥 Received GET request (OAuth Discovery / RFC 9728)")
             print(f"   Path: {self.path}")
