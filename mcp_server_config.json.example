@@ -15,6 +15,7 @@
     "get_instructions_description": "Returns system instructions and operational directives",
     "get_instructions_prefix": "instructions",
     "get_instructions_enabled": true,
+    "request_response_logging": true,
     "scenarios_enabled": true,
     "scenarios_data_dir": "./mcp-server-data",
     "scenario_tools": {

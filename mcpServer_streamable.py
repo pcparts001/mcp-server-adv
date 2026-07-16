@@ -25,11 +25,17 @@ MCP Gateway 越し、またはダイレクト接続での利用を想定。
 """
 
 import contextlib
+import functools
 import inspect
 import json
 import os
 import sys
 from typing import Any, Dict, Optional
+
+# print を常に即時フラッシュする。stdout が TTY ではなくファイル/パイプ/
+# journalctl 等に繋がっていると Python は 4KB 単位のブロックバッファリングを
+# 行い、短いリクエスト/レスポンスログが遅延して見えるため。
+print = functools.partial(print, flush=True)
 
 import scenario_tools  # shared demo-scenario tool logic (transport-agnostic)
 
@@ -78,6 +84,10 @@ def load_config(config_path: str = "mcp_server_config.json") -> Dict[str, Any]:
         # get_instructions（プロンプトインジェクション模擬データを返すデモ用ツール）の有効/無効。
         # 無効(false)にすると tools/list から除外され、tools/call も拒否される。
         "get_instructions_enabled": True,
+        # Streamable 版で JSON-RPC リクエスト/レスポンスの詳細ログ
+        # （method/id/params/result/error）を標準出力するか（既定: true）。
+        # oauth.enabled に関わらず動作。標準版(mcpServer.py)は元々詳細ログを出す。
+        "request_response_logging": True,
         "oauth": {
             "enabled": False,
             "public_resource_url": "",
@@ -533,6 +543,232 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 # ============================================================
+# リクエスト/レスポンス詳細ログ（pure ASGI ミドルウェア）
+# ============================================================
+class RequestResponseLoggingMiddleware:
+    """JSON-RPC リクエスト/レスポンスの詳細ログを出力する純粋 ASGI ミドルウェア。
+
+    FastMCP が内部処理する Streamable HTTP の中身（method/id/params と
+    result/error）を、SSE ストリーミングを破壊せずにロギングする。
+
+    仕組み: receive/send の ASGI callable をラップし、http.request /
+    http.response.body イベントのボディを「覗き見（sniff）しつつ下流へそのまま
+    転送」する。BaseHTTPMiddleware は body を消費してしまうが、本ミドルウェアは
+    イベントを透過させるだけなので SSE のチャンクストリーミングも壊さない。
+
+    リクエストログは受信完了時に、レスポンスログは exchange 終了時（finally）に出力。
+    """
+
+    def __init__(self, app, *, enabled: bool = True, max_body_chars: int = 6000):
+        self.app = app
+        self.enabled = enabled
+        self.max_body_chars = max_body_chars
+
+    async def __call__(self, scope, receive, send):
+        # 非 http（lifespan 等）は素通し
+        if not self.enabled or scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        client = scope.get("client")  # [host, port] or None
+        client_str = f"{client[0]}:{client[1]}" if client else "unknown"
+        headers_dict = self._decode_headers(scope.get("headers") or [])
+
+        req_chunks: list = []
+        req_logged = {"done": False}
+
+        async def receive_wrapped():
+            message = await receive()
+            if message.get("type") == "http.request":
+                body = message.get("body", b"")
+                if body:
+                    req_chunks.append(body)
+                # リクエストボディ受信完了（最後のチャンク）で即座にリクエストログを出す
+                if not message.get("more_body") and not req_logged["done"]:
+                    req_logged["done"] = True
+                    self._log_request(method, path, client_str, headers_dict, req_chunks)
+            return message
+
+        resp_status = {"code": None}
+        resp_chunks: list = []
+
+        async def send_wrapped(message):
+            mtype = message.get("type")
+            if mtype == "http.response.start":
+                resp_status["code"] = message.get("status")
+            elif mtype == "http.response.body":
+                body = message.get("body", b"")
+                if body:
+                    resp_chunks.append(body)
+            await send(message)
+
+        try:
+            await self.app(scope, receive_wrapped, send_wrapped)
+        finally:
+            # body 無しリクエスト（GET 等）で receive が最後まで呼ばれなかった場合はここで出力
+            if not req_logged["done"]:
+                self._log_request(method, path, client_str, headers_dict, req_chunks)
+            self._log_response(method, path, resp_status.get("code"), resp_chunks)
+
+    # ---- helpers ----
+    @staticmethod
+    def _decode_headers(headers):
+        out = {}
+        for k, v in headers:
+            try:
+                out[k.decode("latin-1").lower()] = v.decode("latin-1")
+            except Exception:
+                continue
+        return out
+
+    def _truncate(self, text: str) -> str:
+        if len(text) <= self.max_body_chars:
+            return text
+        return text[: self.max_body_chars] + (
+            f"\n... (truncated, {len(text) - self.max_body_chars} more chars)"
+        )
+
+    def _pretty(self, obj) -> str:
+        try:
+            return json.dumps(obj, ensure_ascii=False, indent=2)
+        except Exception:
+            return str(obj)
+
+    @staticmethod
+    def _indent(text: str, n: int) -> str:
+        pad = " " * n
+        lines = text.splitlines() or [""]
+        return "\n".join(pad + line for line in lines)
+
+    @staticmethod
+    def _safe_json(text: str):
+        try:
+            return json.loads(text)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_sse_data(text: str):
+        """SSE ストリームから data: ペイロードを抽出する。
+
+        1メッセージは連続する data: 行（改行で結合）。メッセージは空行で区切られる。
+        event:/id:/retry: 等の他フィールド、:(コメント) は無視。
+        非 SSE ボディ（data: を含まない）なら空リストを返す（呼び出し側で通常 JSON 扱い）。
+        """
+        if "data:" not in text:
+            return []
+        payloads = []
+        current = []
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                data = line[5:]
+                if data.startswith(" "):
+                    data = data[1:]
+                current.append(data)
+            elif line.startswith(":"):
+                continue  # SSE comment
+            elif line.strip() == "":
+                if current:
+                    payloads.append("\n".join(current))
+                    current = []
+            # event:/id:/retry: 等は無視
+        if current:
+            payloads.append("\n".join(current))
+        return payloads
+
+    # ---- request logging ----
+    def _log_request(self, method, path, client_str, headers, req_chunks):
+        print(f"\n{'='*60}")
+        print(f"📥 {method} {path}  (client: {client_str})")
+        print(f"   Headers:")
+        for hk in sorted(headers.keys()):
+            print(f"      {hk}: {headers[hk]}")
+
+        body_text = (
+            b"".join(req_chunks).decode("utf-8", errors="replace") if req_chunks else ""
+        )
+        if not body_text:
+            print("   Body: (empty)")
+            print(f"{'='*60}")
+            return
+
+        parsed = self._safe_json(body_text)
+        if isinstance(parsed, list):
+            print(f"   JSON-RPC batch request ({len(parsed)} items):")
+            for item in parsed:
+                self._print_request_item(item)
+        elif isinstance(parsed, dict):
+            self._print_request_item(parsed)
+        else:
+            print(f"   Body (non-JSON, {len(body_text)} bytes):")
+            print(self._indent(self._truncate(body_text), 6))
+        print(f"{'='*60}")
+
+    def _print_request_item(self, item):
+        if not isinstance(item, dict):
+            print(f"   (non-dict item)")
+            return
+        m = item.get("method")
+        rid = item.get("id")
+        if m:
+            print(f"   JSON-RPC request   id={rid}   method={m}")
+            params = item.get("params")
+            if params is not None:
+                print(f"   params:")
+                print(self._indent(self._truncate(self._pretty(params)), 6))
+        else:
+            print(f"   JSON-RPC message   id={rid}:")
+            print(self._indent(self._truncate(self._pretty(item)), 6))
+
+    # ---- response logging ----
+    def _log_response(self, method, path, status, resp_chunks):
+        body_text = (
+            b"".join(resp_chunks).decode("utf-8", errors="replace") if resp_chunks else ""
+        )
+        print(f"\n{'='*60}")
+        print(f"📤 Response {status}   ({method} {path})")
+        if not body_text:
+            print("   Body: (empty)")
+            print(f"{'='*60}\n")
+            return
+
+        payloads = self._extract_sse_data(body_text)
+        if payloads:
+            print(f"   (SSE response, {len(payloads)} message(s))")
+            for payload in payloads:
+                self._print_response_item(self._safe_json(payload), payload)
+        else:
+            parsed = self._safe_json(body_text)
+            if parsed is not None:
+                print(f"   response body:")
+                print(self._indent(self._truncate(self._pretty(parsed)), 6))
+            else:
+                print(f"   body (raw, {len(body_text)} bytes):")
+                print(self._indent(self._truncate(body_text), 6))
+        print(f"{'='*60}\n")
+
+    def _print_response_item(self, parsed, raw):
+        if isinstance(parsed, dict):
+            rid = parsed.get("id")
+            if "result" in parsed:
+                print(f"   JSON-RPC response   id={rid}   result:")
+                print(self._indent(self._truncate(self._pretty(parsed["result"])), 6))
+            elif "error" in parsed:
+                print(f"   JSON-RPC response   id={rid}   error:")
+                print(self._indent(self._truncate(self._pretty(parsed["error"])), 6))
+            else:
+                print(f"   JSON-RPC message   id={rid}:")
+                print(self._indent(self._truncate(self._pretty(parsed)), 6))
+        elif isinstance(parsed, list):
+            print(f"   JSON-RPC batch response ({len(parsed)} items):")
+            print(self._indent(self._truncate(self._pretty(parsed)), 6))
+        else:
+            print(f"   SSE data (non-JSON): {self._truncate(raw)}")
+
+
+# ============================================================
 # Starlette アプリ組み立て
 # ============================================================
 def build_app(config: Dict[str, Any]):
@@ -603,7 +839,10 @@ def build_app(config: Dict[str, Any]):
     app.state.oauth_verifier = oauth_verifier
     app.state.serve_metadata_at_root = serve_metadata_at_root
 
-    # ミドルウェア: CORS（外）→ BearerAuth（oauth.enabled 時に /mcp を認証）→ アプリ
+    # ミドルウェア（外→内）: RequestResponseLogging → CORS → BearerAuth → アプリ
+    # ※ add_middleware は後から追加したものほど外側になる。
+    # RequestResponseLogging を一番外に置き、認証(CORS/BearerAuth)やメタデータを含む
+    # 全てのリクエスト/レスポンス（401 含む）の JSON-RPC 中身を覗き見する。
     # （Cisco GW 互換ハック3種は RFC 9728 / OAuth 2.1 準拠 GW では不要・有害なため削除済）
     app.add_middleware(BearerAuthMiddleware)
     app.add_middleware(
@@ -613,6 +852,8 @@ def build_app(config: Dict[str, Any]):
         allow_headers=["Content-Type", "Authorization", "Mcp-Protocol-Version", "Mcp-Session-Id"],
         expose_headers=["Mcp-Session-Id"],
     )
+    if config.get("request_response_logging", True):
+        app.add_middleware(RequestResponseLoggingMiddleware)
 
     return app, mcp
 
